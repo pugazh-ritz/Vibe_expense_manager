@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import path from "path";
 
 export default defineConfig({
-  root: "client", // 👈 tells Vite to look for index.html inside /client
+  root: "client",
   plugins: [react()],
   build: {
     outDir: "../dist/client",
