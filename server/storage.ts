@@ -124,3 +124,18 @@ export class PostgresStorage implements IStorage {
 
 // ✅ after defining PostgresStorage above
 export const storage = new PostgresStorage();
+// 🧱 Automatically sync schema (creates tables if missing)
+import * as schema from "@shared/schema";
+
+(async () => {
+  try {
+    console.log("🔄 Syncing database schema...");
+    await db.execute(`
+      CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+    `);
+    await db.sync({ schema });
+    console.log("✅ Database schema synced successfully!");
+  } catch (err) {
+    console.error("❌ Failed to sync schema:", err);
+  }
+})();
