@@ -11,7 +11,8 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "client/src"),
+      "@": path.resolve(__dirname, "client/src"),       // existing alias
+      "@shared": path.resolve(__dirname, "shared"),     // ✅ add this line
     },
   },
 });
