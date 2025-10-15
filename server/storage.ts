@@ -1,12 +1,22 @@
-import { 
-  type Expense, 
+import { drizzle } from "drizzle-orm/postgres-js";
+import { eq } from "drizzle-orm";
+import postgres from "postgres";
+import {
+  expenses,
+  savingsGoals,
+  dailyBudget,
+  type Expense,
   type InsertExpense,
   type SavingsGoal,
   type InsertSavingsGoal,
   type DailyBudget,
-  type InsertDailyBudget
+  type InsertDailyBudget,
 } from "@shared/schema";
-import { randomUUID } from "crypto";
+
+// Connect to Postgres using the DATABASE_URL from Render
+// SSL required for Render’s hosted PostgreSQL
+const client = postgres(process.env.DATABASE_URL!, { ssl: 'require' });
+export const db = drizzle(client);
 
 export interface IStorage {
   // Expense methods
@@ -27,107 +37,90 @@ export interface IStorage {
   updateBudgetSpent(date: string, amount: number): Promise<void>;
 }
 
-export class MemStorage implements IStorage {
-  private expenses: Map<string, Expense>;
-  private savingsGoals: Map<string, SavingsGoal>;
-  private dailyBudgets: Map<string, DailyBudget>;
-
-  constructor() {
-    this.expenses = new Map();
-    this.savingsGoals = new Map();
-    this.dailyBudgets = new Map();
-  }
-
-  async createExpense(insertExpense: InsertExpense): Promise<Expense> {
-    const id = randomUUID();
-    const expense: Expense = { 
-      ...insertExpense,
-      description: insertExpense.description || null,
-      id, 
-      date: new Date().toISOString() 
-    };
-    this.expenses.set(id, expense);
-    return expense;
+export class PostgresStorage implements IStorage {
+  // ----- Expenses -----
+  async createExpense(expense: InsertExpense): Promise<Expense> {
+    const [newExpense] = await db.insert(expenses).values({
+      ...expense,
+      date: new Date().toISOString().split("T")[0],
+    }).returning();
+    return newExpense;
   }
 
   async getExpenses(): Promise<Expense[]> {
-    return Array.from(this.expenses.values()).sort((a, b) => 
-      new Date(b.date).getTime() - new Date(a.date).getTime()
-    );
+    return await db.select().from(expenses);
   }
 
   async getExpensesByDate(date: string): Promise<Expense[]> {
-    return Array.from(this.expenses.values())
-      .filter(e => e.date.startsWith(date))
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    return await db.select().from(expenses).where(eq(expenses.date, date));
   }
 
   async deleteExpense(id: string): Promise<void> {
-    this.expenses.delete(id);
+    await db.delete(expenses).where(eq(expenses.id, id));
   }
 
-  async createSavingsGoal(insertGoal: InsertSavingsGoal): Promise<SavingsGoal> {
-    const id = randomUUID();
-    const goal: SavingsGoal = { 
-      ...insertGoal,
-      icon: insertGoal.icon || null,
-      id,
+  // ----- Savings Goals -----
+  async createSavingsGoal(goal: InsertSavingsGoal): Promise<SavingsGoal> {
+    const [newGoal] = await db.insert(savingsGoals).values({
+      ...goal,
       currentAmount: "0",
-      createdAt: new Date().toISOString() 
-    };
-    this.savingsGoals.set(id, goal);
-    return goal;
+      createdAt: new Date().toISOString(),
+    }).returning();
+    return newGoal;
   }
 
   async getSavingsGoals(): Promise<SavingsGoal[]> {
-    return Array.from(this.savingsGoals.values()).sort((a, b) => 
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+    return await db.select().from(savingsGoals);
   }
 
   async getSavingsGoal(id: string): Promise<SavingsGoal | undefined> {
-    return this.savingsGoals.get(id);
+    const [goal] = await db.select().from(savingsGoals).where(eq(savingsGoals.id, id));
+    return goal;
   }
 
   async addToSavingsGoal(id: string, amount: number): Promise<SavingsGoal> {
-    const goal = this.savingsGoals.get(id);
-    if (!goal) throw new Error("Goal not found");
-    
-    const currentAmount = parseFloat(goal.currentAmount) + amount;
-    const updatedGoal = { ...goal, currentAmount: currentAmount.toString() };
-    this.savingsGoals.set(id, updatedGoal);
+    const goal = await this.getSavingsGoal(id);
+    if (!goal) throw new Error("Savings goal not found");
+
+    const updatedAmount = Number(goal.currentAmount) + amount;
+    const [updatedGoal] = await db.update(savingsGoals)
+      .set({ currentAmount: updatedAmount.toString() })
+      .where(eq(savingsGoals.id, id))
+      .returning();
+
     return updatedGoal;
   }
 
-  async createOrUpdateDailyBudget(insertBudget: InsertDailyBudget): Promise<DailyBudget> {
-    const existing = this.dailyBudgets.get(insertBudget.date);
+  // ----- Daily Budget -----
+  async createOrUpdateDailyBudget(budget: InsertDailyBudget): Promise<DailyBudget> {
+    const existing = await this.getDailyBudget(budget.date);
     if (existing) {
-      const updated = { ...existing, limit: insertBudget.limit };
-      this.dailyBudgets.set(insertBudget.date, updated);
+      const [updated] = await db.update(dailyBudget)
+        .set({ limit: budget.limit })
+        .where(eq(dailyBudget.date, budget.date))
+        .returning();
       return updated;
+    } else {
+      const [newBudget] = await db.insert(dailyBudget).values(budget).returning();
+      return newBudget;
     }
-    
-    const id = randomUUID();
-    const budget: DailyBudget = { 
-      ...insertBudget, 
-      id,
-      spent: "0" 
-    };
-    this.dailyBudgets.set(insertBudget.date, budget);
-    return budget;
   }
 
   async getDailyBudget(date: string): Promise<DailyBudget | undefined> {
-    return this.dailyBudgets.get(date);
+    const [budget] = await db.select().from(dailyBudget).where(eq(dailyBudget.date, date));
+    return budget;
   }
 
   async updateBudgetSpent(date: string, amount: number): Promise<void> {
-    const budget = this.dailyBudgets.get(date);
-    if (budget) {
-      const spent = parseFloat(budget.spent) + amount;
-      this.dailyBudgets.set(date, { ...budget, spent: spent.toString() });
-    }
+    const budget = await this.getDailyBudget(date);
+    if (!budget) throw new Error("Budget not found");
+
+    const updatedSpent = Number(budget.spent) + amount;
+    await db.update(dailyBudget)
+      .set({ spent: updatedSpent.toString() })
+      .where(eq(dailyBudget.date, date));
   }
 }
 
-export const storage = new MemStorage();
+// ✅ after defining PostgresStorage above
+export const storage = new PostgresStorage();
